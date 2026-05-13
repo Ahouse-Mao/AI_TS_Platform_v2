@@ -36,19 +36,19 @@ class AgentState(TypedDict, total=False):
 def _init_agent_data() -> dict[str, Any]:
     """初始化 agent_data 结构"""
     return {
-        "intent": "",                  # plan 解析出的用户意图
-        "plan": {},                    # plan agent 输出的初始化参数
-        "work": {},                    # work agent 输出的训练/推理结果
-        "eval": {},                    # eval agent 输出的评估建议
-        "summary": {},                 # summary agent 输出的经验总结
+        "intent": "",
+        "plan": {},
+        "work": {},
+        "eval": {},
+        "summary": {},
         "agent_params": {
-            "max_iteration": 1,        # 最大迭代轮数（1 = 不自动迭代）
-            "visualize": False,        # 是否可视化
+            "max_iteration": 1,
+            "visualize": False,
         },
         "agent_state": {
-            "iteration": 0,            # 当前迭代轮数
+            "iteration": 0,
         },
-        "history": [],                 # 历史迭代快照
+        "history": [],
     }
 
 
@@ -57,10 +57,7 @@ def _init_agent_data() -> dict[str, Any]:
 # ============================================================
 
 def plan_node(state: AgentState) -> AgentState:
-    """
-    Plan Agent 节点：
-    分析用户意图 → 结合 RAG 检索 → 给出初始化模型参数
-    """
+    """分析用户意图 → 结合 RAG 检索 → 给出初始化模型参数"""
     logger.info("[Plan] 开始分析用户意图...")
     agent = PlanAgent()
     try:
@@ -80,10 +77,7 @@ def plan_node(state: AgentState) -> AgentState:
 
 
 def work_node(state: AgentState) -> AgentState:
-    """
-    Work Agent 节点：
-    接收 plan 或 eval 的参数 → 调用后端 API → 启动训练/推理
-    """
+    """接收参数 → 调用后端 API → 启动训练/推理，并递增迭代计数"""
     logger.info("[Work] 开始执行训练/推理任务...")
     agent = WorkAgent()
     try:
@@ -91,6 +85,7 @@ def work_node(state: AgentState) -> AgentState:
         state["status"] = "success"
         state["agent"] = "work"
         state["agent_data"]["work"] = result.get("work", {})
+        state["agent_data"]["agent_state"]["iteration"] += 1
         state["next_action"] = result.get("next_action", "end")
     except Exception as e:
         logger.error(f"[Work] 执行失败: {e}")
@@ -101,10 +96,7 @@ def work_node(state: AgentState) -> AgentState:
 
 
 def eval_node(state: AgentState) -> AgentState:
-    """
-    Eval Agent 节点：
-    分析 work 结果 → 计算指标 → 给出优化建议 → 控制迭代深度
-    """
+    """分析 work 结果 → 计算指标 → 给出优化建议，并记录历史快照"""
     logger.info("[Eval] 开始评估训练结果...")
     agent = EvalAgent()
     try:
@@ -113,7 +105,6 @@ def eval_node(state: AgentState) -> AgentState:
         state["agent"] = "eval"
         state["agent_data"]["eval"] = result.get("eval", {})
 
-        # 记录迭代快照
         iteration = state["agent_data"]["agent_state"]["iteration"]
         state["agent_data"]["history"].append({
             "iteration": iteration,
@@ -131,10 +122,7 @@ def eval_node(state: AgentState) -> AgentState:
 
 
 def summary_node(state: AgentState) -> AgentState:
-    """
-    Summary Agent 节点：
-    总结训练经验 → 存入 RAG 知识库
-    """
+    """总结训练经验 → 存入 RAG 知识库"""
     logger.info("[Summary] 开始总结训练经验...")
     agent = SummaryAgent()
     try:
@@ -152,61 +140,58 @@ def summary_node(state: AgentState) -> AgentState:
 
 
 # ============================================================
-# 路由函数 — 控制 Agent 间的流转
+# 统一路由 —— 根据 next_action + 迭代状态决定下一个节点
 # ============================================================
 
-def router_after_plan(state: AgentState) -> Literal["work", "end"]:
-    """plan 之后的路由：判断是否需要继续到 work"""
+def router(state: AgentState) -> Literal["plan", "work", "eval", "summary", "end"]:
+    """
+    唯一路由函数：读取 state.next_action 和迭代状态来决定下一步
+
+    路由逻辑（文字描述等价于下方的 if-else 链）：
+      id: plan
+        后接 -> work
+
+      id: work
+        后接 -> eval | summary | end
+        根据 next_action 决定
+
+      id: eval
+        后接 -> summary（默认）
+        如果 next_action == "work" 且 iteration < max_iteration → work（继续循环）
+        否则 → summary
+
+      id: summary
+        后接 -> end
+
+    """
     if state.get("status") == "error":
         return "end"
-    next_action = state.get("next_action", "end")
-    if next_action == "work":
-        return "work"
-    return "end"
 
+    na = state.get("next_action", "end")
+    current_agent = state.get("agent", "")
 
-def router_after_work(state: AgentState) -> Literal["eval", "summary", "end"]:
-    """
-    work 之后的路由：
-    - 需要自动迭代 → 进入 eval
-    - 需要总结     → 进入 summary
-    - 普通任务     → 结束
-    """
-    if state.get("status") == "error":
+    # 错误兜底
+    if na == "end":
         return "end"
 
-    max_iter = state["agent_data"]["agent_params"].get("max_iteration", 1)
-    iteration = state["agent_data"]["agent_state"].get("iteration", 0)
+    # work → eval 或 summary 或 end
+    if current_agent == "work":
+        if na == "eval":
+            return "eval"
+        if na == "summary":
+            return "summary"
+        return "end"
 
-    # 首次 work 后 iteration=1 表示已完成第 1 轮
-    state["agent_data"]["agent_state"]["iteration"] = iteration + 1
-
-    next_action = state.get("next_action", "end")
-    if next_action == "eval":
-        return "eval"
-    elif next_action == "summary":
+    # eval → 循环回 work 或 summary
+    if current_agent == "eval":
+        iteration = state["agent_data"]["agent_state"]["iteration"]
+        max_iter = state["agent_data"]["agent_params"]["max_iteration"]
+        if na == "work" and iteration < max_iter:
+            return "work"
         return "summary"
-    else:
-        return "end"
 
-
-def router_after_eval(state: AgentState) -> Literal["work", "summary"]:
-    """
-    eval 之后的路由：
-    - 未达到最大迭代 → 回到 work 继续优化
-    - 达到最大迭代   → 进入 summary 总结
-    """
-    if state.get("status") == "error":
-        return "summary"
-
-    iteration = state["agent_data"]["agent_state"].get("iteration", 0)
-    max_iter = state["agent_data"]["agent_params"].get("max_iteration", 1)
-
-    next_action = state.get("next_action", "summary")
-
-    if next_action == "work" and iteration < max_iter:
-        return "work"
-    return "summary"
+    # plan → work（默认）
+    return "work"
 
 
 # ============================================================
@@ -215,49 +200,38 @@ def router_after_eval(state: AgentState) -> Literal["work", "summary"]:
 
 def build_graph() -> StateGraph:
     """
-    构建 Agent 工作流图：
+    构建 Agent 工作流图
 
-    START
-      │
-      ▼
-    plan ──(router)──► work ──(router)──► eval ──(router)──► work (loop)
-      │                   │                  │
-      │                   │                  └──► summary ──► END
-      │                   └──► summary / END
-      └──► END
+    START → plan → router ──→ work → router ──→ eval → router ──→ work (loop)
+                              │                  │
+                              ├──→ summary       └──→ summary → END
+                              └──→ END
     """
     graph = StateGraph(AgentState)
 
-    # 添加节点
     graph.add_node("plan", plan_node)
     graph.add_node("work", work_node)
     graph.add_node("eval", eval_node)
     graph.add_node("summary", summary_node)
 
-    # 添加边
     graph.add_edge(START, "plan")
 
-    # plan → router → work / end
-    graph.add_conditional_edges("plan", router_after_plan, {
+    # 所有节点统一走 router 做下一步决策
+    graph.add_conditional_edges("plan", router, { # plan之后必定进入work或者直接结束
         "work": "work",
         "end": END,
     })
-
-    # work → router → eval / summary / end
-    graph.add_conditional_edges("work", router_after_work, {
+    graph.add_conditional_edges("work", router, { # work之后可能进入eval、summary或者直接结束
         "eval": "eval",
         "summary": "summary",
         "end": END,
     })
-
-    # eval → router → work (loop) / summary
-    graph.add_conditional_edges("eval", router_after_eval, {
+    graph.add_conditional_edges("eval", router, { # eval之后可能进入work（继续迭代）或者summary（结束迭代）
         "work": "work",
         "summary": "summary",
+        "end": END,
     })
-
-    # summary → END
-    graph.add_edge("summary", END)
+    graph.add_edge("summary", END) # summary 之后可能结束
 
     return graph
 
@@ -298,7 +272,6 @@ class TSPlatform:
             "next_action": "plan",
         }
 
-        # 将用户输入和额外参数注入初始状态
         initial_state["agent_data"]["intent"] = user_input
         initial_state["agent_data"]["agent_params"].update({
             "max_iteration": kwargs.get("max_iteration", 1),
