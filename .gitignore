@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+backend/RAG/bge-small-zh-v1.5
+backend/RAG/rag_db_struct
+
 *.onnx
 *.pth
 *.pt
@@ -16,3 +19,5 @@ wheels/
 *.npy
 *.pdf
 *.so
+*.txt
+*.json

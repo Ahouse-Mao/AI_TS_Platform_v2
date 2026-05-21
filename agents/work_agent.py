@@ -79,7 +79,7 @@ class WorkAgent:
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         """
-        执行训练或推理
+        执行训练或推理，直接修改并返回 state
 
         Args:
             state: AgentState，包含:
@@ -88,16 +88,7 @@ class WorkAgent:
                 - agent_data.agent_params: 编排参数
 
         Returns:
-            {
-                "work": {
-                    "status": str,
-                    "checkpoint_path": str,
-                    "log_path": str,
-                    "metrics": dict,
-                    "raw_log": str,
-                },
-                "next_action": str,
-            }
+            更新后的完整 AgentState
         """
         plan_params = state.get("agent_data", {}).get("plan", {})
         eval_suggestions = state.get("agent_data", {}).get("eval", {})
@@ -108,31 +99,30 @@ class WorkAgent:
         # TODO: 实际逻辑
         # 1. 如果是推理任务，先查找检查点
         # if intent == "inference":
-        #     checkpoint = self.checkpoint_skill.find_best(model=plan_params["model_name"], dataset=plan_params["dataset"])
-
+        #     checkpoint = self.checkpoint_skill.find_best(...)
         # 2. 合并 eval 建议参数
         # merged_params = {**plan_params, **eval_suggestions.get("param_adjustments", {})}
-
         # 3. 调用后端 API
         # result = self.api_skill.run_training(merged_params)
-        # self.api_skill.run_inference(merged_params)
-
         # 4. 解析日志
         # metrics = self.log_parser_skill.parse(result["log_path"])
 
-        # ---- 占位返回 ----
-        return {
-            "work": {
-                "status": "completed",
-                "checkpoint_path": "/path/to/checkpoint.pth",
-                "log_path": "/path/to/training.log",
-                "metrics": {
-                    "train_loss": [0.5, 0.3, 0.2],
-                    "val_loss": [0.6, 0.4, 0.35],
-                    "mse": 0.15,
-                    "mae": 0.25,
-                },
-                "raw_log": "Epoch 1: loss=0.5\nEpoch 2: loss=0.3\n...",
+        # ---- 占位：直接修改 state ----
+        state["status"] = "success"
+        state["agent"] = "work"
+        state["agent_data"]["work"] = {
+            "status": "completed",
+            "checkpoint_path": "/path/to/checkpoint.pth",
+            "log_path": "/path/to/training.log",
+            "metrics": {
+                "train_loss": [0.5, 0.3, 0.2],
+                "val_loss": [0.6, 0.4, 0.35],
+                "mse": 0.15,
+                "mae": 0.25,
             },
-            "next_action": "eval",
+            "raw_log": "Epoch 1: loss=0.5\nEpoch 2: loss=0.3\n...",
         }
+        state["agent_data"]["agent_state"]["iteration"] += 1
+        state["next_action"] = "eval"
+
+        return state

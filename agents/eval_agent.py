@@ -76,7 +76,7 @@ class EvalAgent:
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         """
-        评估训练结果并给出优化建议
+        评估训练结果并给出优化建议，直接修改并返回 state
 
         Args:
             state: AgentState，包含:
@@ -86,52 +86,47 @@ class EvalAgent:
                 - agent_data.agent_state: 当前状态（iteration）
 
         Returns:
-            {
-                "eval": {
-                    "metrics": dict,
-                    "analysis": str,
-                    "param_adjustments": dict,
-                    "summary": str,
-                },
-                "next_action": str,  # "work" | "summary"
-            }
+            更新后的完整 AgentState
         """
         work_result = state.get("agent_data", {}).get("work", {})
         iteration = state["agent_data"]["agent_state"]["iteration"]
         max_iter = state["agent_data"]["agent_params"].get("max_iteration", 1)
-        history = state.get("agent_data", {}).get("history", [])
 
         logger.info(f"[EvalAgent] 第 {iteration} 轮评估，最大迭代 {max_iter}")
 
         # TODO: 实际逻辑
         # 1. 计算指标
         # metrics = self.metric_skill.compute(work_result)
-
         # 2. LLM 分析 + 对比历史
         # analysis = llm.invoke(system_prompt=self.SYSTEM_PROMPT, context=work_result, history=history)
-
         # 3. 判断是否继续迭代
-        # if iteration < max_iter and metrics improving:
-        #     next_action = "work"
-        # else:
-        #     next_action = "summary"
 
-        # ---- 占位返回 ----
         should_continue = iteration < max_iter
 
-        return {
-            "eval": {
-                "metrics": {
-                    "mse": work_result.get("metrics", {}).get("mse", 0.15),
-                    "mae": work_result.get("metrics", {}).get("mae", 0.25),
-                    "rmse": 0.39,
-                    "mape": 8.5,
-                },
-                "analysis": "模型在第 {} 轮训练中收敛良好，val_loss 持续下降。".format(iteration),
-                "param_adjustments": {
-                    "learning_rate": 5e-5,
-                } if should_continue else {},
-                "summary": "第 {} 轮评估：MSE=0.15, MAE=0.25".format(iteration),
+        # ---- 占位：直接修改 state ----
+        state["status"] = "success"
+        state["agent"] = "eval"
+        state["agent_data"]["eval"] = {
+            "metrics": {
+                "mse": work_result.get("metrics", {}).get("mse", 0.15),
+                "mae": work_result.get("metrics", {}).get("mae", 0.25),
+                "rmse": 0.39,
+                "mape": 8.5,
             },
-            "next_action": "work" if should_continue else "summary",
+            "analysis": "模型在第 {} 轮训练中收敛良好，val_loss 持续下降。".format(iteration),
+            "param_adjustments": {
+                "learning_rate": 5e-5,
+            } if should_continue else {},
+            "summary": "第 {} 轮评估：MSE=0.15, MAE=0.25".format(iteration),
         }
+
+        # 记录历史快照
+        state["agent_data"]["history"].append({
+            "iteration": iteration,
+            "eval_summary": state["agent_data"]["eval"].get("summary", ""),
+            "metrics": state["agent_data"]["eval"].get("metrics", {}),
+        })
+
+        state["next_action"] = "work" if should_continue else "summary"
+
+        return state

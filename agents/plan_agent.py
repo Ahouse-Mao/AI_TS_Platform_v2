@@ -59,7 +59,7 @@ class PlanAgent:
     """
 
     SYSTEM_PROMPT = """你是时序预测任务规划专家。根据用户的自然语言描述：
-1. 识别用户意图（train / train_with_iteration / inference）
+1. 识别用户意图（单次训练 / 迭代训练 / 推理）
 2. 从知识库中检索相似历史任务，参考其参数配置
 3. 生成模型初始化参数（model_name, dataset, seq_len, pred_len, batch_size, learning_rate, epochs 等）
 4. 设定 agent_params（max_iteration / visualize）
@@ -72,20 +72,14 @@ class PlanAgent:
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         """
-        执行计划推理
+        执行计划推理，直接修改并返回 state
 
         Args:
             state: AgentState，包含:
                 - agent_data.intent: 用户原始输入
-                - agent_data.history: 历史迭代快照（可能为空）
 
         Returns:
-            {
-                "intent": str,          # 任务意图
-                "plan": dict,           # 模型初始化参数
-                "agent_params": dict,   # 编排参数
-                "next_action": str,     # 下一步: "work"
-            }
+            更新后的完整 AgentState
         """
         user_intent = state.get("agent_data", {}).get("intent", "")
         logger.info(f"[PlanAgent] 收到用户意图: {user_intent}")
@@ -93,15 +87,15 @@ class PlanAgent:
         # TODO: 调用 LLM 解析意图 + RAG 检索 + 生成参数
         # 1. RAG 检索相似历史任务
         # rag_results = self.rag_skill.search(user_intent)
-
         # 2. LLM 推理生成 plan
         # plan = llm.invoke(system_prompt=self.SYSTEM_PROMPT, user_prompt=user_intent)
-
         # 3. 参数校验
         # self.param_validate_skill.validate(plan)
 
-        # ---- 占位返回 ----
-        plan = {
+        # ---- 占位：直接修改 state ----
+        state["status"] = "success"
+        state["agent"] = "plan"
+        state["agent_data"]["plan"] = {
             "model_name": "DLinear",
             "dataset": "ETTh1",
             "seq_len": 96,
@@ -110,14 +104,11 @@ class PlanAgent:
             "learning_rate": 1e-4,
             "epochs": 10,
         }
-        agent_params = state.get("agent_data", {}).get("agent_params", {
+        state["agent_data"]["intent"] = "train"
+        state["agent_data"]["agent_params"] = state.get("agent_data", {}).get("agent_params", {
             "max_iteration": 1,
             "visualize": False,
         })
+        state["next_action"] = "work"
 
-        return {
-            "intent": "train",
-            "plan": plan,
-            "agent_params": agent_params,
-            "next_action": "work",
-        }
+        return state

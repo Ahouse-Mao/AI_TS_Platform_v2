@@ -71,7 +71,7 @@ class SummaryAgent:
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         """
-        总结训练经验并写入知识库
+        总结训练经验并写入知识库，直接修改并返回 state
 
         Args:
             state: AgentState，包含:
@@ -82,16 +82,7 @@ class SummaryAgent:
                 - task_id: 任务 ID
 
         Returns:
-            {
-                "summary": {
-                    "task_id": str,
-                    "best_metrics": dict,
-                    "best_params": dict,
-                    "experience": str,
-                    "recommendations": list[str],
-                },
-                "next_action": "end",
-            }
+            更新后的完整 AgentState
         """
         history = state.get("agent_data", {}).get("history", [])
         plan = state.get("agent_data", {}).get("plan", {})
@@ -101,43 +92,37 @@ class SummaryAgent:
 
         # TODO: 实际逻辑
         # 1. LLM 总结所有历史
-        # summary = llm.invoke(
-        #     system_prompt=self.SYSTEM_PROMPT,
-        #     context={"history": history, "plan": plan}
-        # )
-
+        # summary = llm.invoke(system_prompt=self.SYSTEM_PROMPT, context={"history": history, "plan": plan})
         # 2. 写入向量数据库
-        # self.vector_db_skill.insert(
-        #     collection="training_experience",
-        #     data=summary,
-        #     metadata={"task_id": task_id, "model": plan["model_name"], "dataset": plan["dataset"]}
-        # )
+        # self.vector_db_skill.insert(...)
 
-        # ---- 占位返回 ----
         best_mse = min(
             (h.get("metrics", {}).get("mse", float("inf")) for h in history),
             default=0.15,
         )
 
-        return {
-            "summary": {
-                "task_id": task_id,
-                "best_metrics": {
-                    "mse": best_mse,
-                    "mae": 0.25,
-                    "iteration": len(history),
-                },
-                "best_params": plan,
-                "experience": (
-                    f"在 {plan.get('dataset', 'unknown')} 数据集上，"
-                    f"{plan.get('model_name', 'unknown')} 模型经过 {len(history)} 轮迭代优化，"
-                    f"最终 MSE={best_mse}。"
-                ),
-                "recommendations": [
-                    "建议初始学习率设为 1e-4",
-                    "pred_len 较大时适当增加 seq_len",
-                    "定期使用 eval agent 检查过拟合",
-                ],
+        # ---- 占位：直接修改 state ----
+        state["status"] = "success"
+        state["agent"] = "summary"
+        state["agent_data"]["summary"] = {
+            "task_id": task_id,
+            "best_metrics": {
+                "mse": best_mse,
+                "mae": 0.25,
+                "iteration": len(history),
             },
-            "next_action": "end",
+            "best_params": plan,
+            "experience": (
+                f"在 {plan.get('dataset', 'unknown')} 数据集上，"
+                f"{plan.get('model_name', 'unknown')} 模型经过 {len(history)} 轮迭代优化，"
+                f"最终 MSE={best_mse}。"
+            ),
+            "recommendations": [
+                "建议初始学习率设为 1e-4",
+                "pred_len 较大时适当增加 seq_len",
+                "定期使用 eval agent 检查过拟合",
+            ],
         }
+        state["next_action"] = "end"
+
+        return state

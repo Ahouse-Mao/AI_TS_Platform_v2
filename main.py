@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# 统一状态定义（与 README 约定的 JSON 格式对齐）
+# 一、统一状态定义（与 README 约定的 JSON 格式对齐）
 # ============================================================
 
 class AgentState(TypedDict, total=False):
@@ -53,21 +53,14 @@ def _init_agent_data() -> dict[str, Any]:
 
 
 # ============================================================
-# Agent 节点函数
+# 二、各 Agent 节点函数
 # ============================================================
 
 def plan_node(state: AgentState) -> AgentState:
-    """分析用户意图 → 结合 RAG 检索 → 给出初始化模型参数"""
+    """Plan Agent 节点 — state 修改下沉到 agent 内部"""
     logger.info("[Plan] 开始分析用户意图...")
-    agent = PlanAgent()
     try:
-        result = agent.run(state)
-        state["status"] = "success"
-        state["agent"] = "plan"
-        state["agent_data"]["plan"] = result.get("plan", {})
-        state["agent_data"]["intent"] = result.get("intent", "")
-        state["agent_data"]["agent_params"] = result.get("agent_params", state["agent_data"]["agent_params"])
-        state["next_action"] = result.get("next_action", "work")
+        state = PlanAgent().run(state)
     except Exception as e:
         logger.error(f"[Plan] 执行失败: {e}")
         state["status"] = "error"
@@ -77,16 +70,10 @@ def plan_node(state: AgentState) -> AgentState:
 
 
 def work_node(state: AgentState) -> AgentState:
-    """接收参数 → 调用后端 API → 启动训练/推理，并递增迭代计数"""
+    """Work Agent 节点 — state 修改下沉到 agent 内部"""
     logger.info("[Work] 开始执行训练/推理任务...")
-    agent = WorkAgent()
     try:
-        result = agent.run(state)
-        state["status"] = "success"
-        state["agent"] = "work"
-        state["agent_data"]["work"] = result.get("work", {})
-        state["agent_data"]["agent_state"]["iteration"] += 1
-        state["next_action"] = result.get("next_action", "end")
+        state = WorkAgent().run(state)
     except Exception as e:
         logger.error(f"[Work] 执行失败: {e}")
         state["status"] = "error"
@@ -96,23 +83,10 @@ def work_node(state: AgentState) -> AgentState:
 
 
 def eval_node(state: AgentState) -> AgentState:
-    """分析 work 结果 → 计算指标 → 给出优化建议，并记录历史快照"""
+    """Eval Agent 节点 — state 修改下沉到 agent 内部"""
     logger.info("[Eval] 开始评估训练结果...")
-    agent = EvalAgent()
     try:
-        result = agent.run(state)
-        state["status"] = "success"
-        state["agent"] = "eval"
-        state["agent_data"]["eval"] = result.get("eval", {})
-
-        iteration = state["agent_data"]["agent_state"]["iteration"]
-        state["agent_data"]["history"].append({
-            "iteration": iteration,
-            "eval_summary": result.get("eval", {}).get("summary", ""),
-            "metrics": result.get("eval", {}).get("metrics", {}),
-        })
-
-        state["next_action"] = result.get("next_action", "summary")
+        state = EvalAgent().run(state)
     except Exception as e:
         logger.error(f"[Eval] 执行失败: {e}")
         state["status"] = "error"
@@ -122,15 +96,10 @@ def eval_node(state: AgentState) -> AgentState:
 
 
 def summary_node(state: AgentState) -> AgentState:
-    """总结训练经验 → 存入 RAG 知识库"""
+    """Summary Agent 节点 — state 修改下沉到 agent 内部"""
     logger.info("[Summary] 开始总结训练经验...")
-    agent = SummaryAgent()
     try:
-        result = agent.run(state)
-        state["status"] = "success"
-        state["agent"] = "summary"
-        state["agent_data"]["summary"] = result.get("summary", {})
-        state["next_action"] = "end"
+        state = SummaryAgent().run(state)
     except Exception as e:
         logger.error(f"[Summary] 执行失败: {e}")
         state["status"] = "error"
@@ -140,9 +109,10 @@ def summary_node(state: AgentState) -> AgentState:
 
 
 # ============================================================
-# 统一路由 —— 根据 next_action + 迭代状态决定下一个节点
+# 三、统一路由 —— 根据 next_action + 迭代状态决定下一个节点
 # ============================================================
 
+# 图构建过程
 def router(state: AgentState) -> Literal["plan", "work", "eval", "summary", "end"]:
     """
     唯一路由函数：读取 state.next_action 和迭代状态来决定下一步
@@ -195,7 +165,7 @@ def router(state: AgentState) -> Literal["plan", "work", "eval", "summary", "end
 
 
 # ============================================================
-# 构建 LangGraph 图
+# 四、构建 LangGraph 图
 # ============================================================
 
 def build_graph() -> StateGraph:
@@ -216,9 +186,9 @@ def build_graph() -> StateGraph:
 
     graph.add_edge(START, "plan")
 
-    # 所有节点统一走 router 做下一步决策
+    # 所有节点运行完后统一走 router 决定下一步，router 内部根据 next_action 和迭代状态进行判断
     graph.add_conditional_edges("plan", router, { # plan之后必定进入work或者直接结束
-        "work": "work",
+        "work": "work", # 三个参数分别是源节点、路由函数、路由结果与目标节点的映射关系
         "end": END,
     })
     graph.add_conditional_edges("work", router, { # work之后可能进入eval、summary或者直接结束
@@ -237,7 +207,7 @@ def build_graph() -> StateGraph:
 
 
 # ============================================================
-# 运行时入口
+# 五、运行时入口
 # ============================================================
 
 class TSPlatform:
@@ -309,7 +279,7 @@ class TSPlatform:
 
 
 # ============================================================
-# CLI 入口
+# 六、CLI 入口
 # ============================================================
 
 if __name__ == "__main__":
