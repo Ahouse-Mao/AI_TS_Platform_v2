@@ -1,0 +1,1 @@
+"""AI-TS-Platform Backend"""

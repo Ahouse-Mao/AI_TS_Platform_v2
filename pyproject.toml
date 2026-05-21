@@ -20,4 +20,5 @@ dependencies = [
     "sentence-transformers>=5.5.0",
     "torch>=2.11.0",
     "transformers>=5.8.1",
+    "uvicorn[standard]>=0.47.0",
 ]

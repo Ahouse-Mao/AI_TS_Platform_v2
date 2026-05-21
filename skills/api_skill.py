@@ -11,9 +11,21 @@ API Skill — 训练/推理 API 调用
 """
 
 import logging
-from typing import Any, Literal
+import time
+from typing import Any
+
+import requests
 
 logger = logging.getLogger(__name__)
+
+# 默认后端 API 基础地址
+_DEFAULT_BASE_URL = "http://localhost:8000"
+
+# 轮询间隔（秒）
+_POLL_INTERVAL = 5.0
+
+# 最大轮询时间（秒），防止无限等待
+_MAX_POLL_TIME = 7200  # 2 小时
 
 
 class APISkill:
@@ -43,59 +55,161 @@ class APISkill:
 
 API 端点：POST /api/train, POST /api/infer, GET /api/status/{task_id}"""
 
-    def __init__(self, base_url: str = "http://localhost:8000"):
-        self.base_url = base_url
+    def __init__(self, base_url: str = _DEFAULT_BASE_URL):
+        self.base_url = base_url.rstrip("/")
+
+    # -----------------------------------------------------------
+    # 公共方法
+    # -----------------------------------------------------------
 
     def run_training(self, params: dict[str, Any]) -> dict[str, Any]:
         """
-        启动训练任务
+        启动训练任务（同步阻塞直到完成）
 
         Args:
-            params: 模型参数配置，包含:
+            params: 模型参数配置，包含：
                 - model_name, dataset, seq_len, pred_len
-                - batch_size, learning_rate, epochs
-                - 其他模型特定参数
+                - batch_size, learning_rate, epochs 等
 
         Returns:
             {
                 "status": "completed" | "failed",
                 "task_id": str,
-                "checkpoint_path": str,
-                "log_path": str,
+                "checkpoint_path": str | None,
+                "log_path": str | None,
+                "metrics": dict,
+                "error": str | None,
             }
         """
         logger.info(f"[APISkill] 启动训练: {params.get('model_name')} on {params.get('dataset')}")
-        # TODO: POST /api/train
-        return {
-            "status": "completed",
-            "task_id": "train_001",
-            "checkpoint_path": "/path/to/checkpoint.pth",
-            "log_path": "/path/to/training.log",
-        }
+
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/train",
+                json=params,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            task_id = result["task_id"]
+            logger.info(f"[APISkill] 训练任务已提交: {task_id}")
+
+            # 轮询直到完成
+            return self._poll_task(task_id)
+
+        except requests.RequestException as e:
+            logger.error(f"[APISkill] 请求训练 API 失败: {e}")
+            return {
+                "status": "failed",
+                "task_id": "",
+                "checkpoint_path": None,
+                "log_path": None,
+                "metrics": {},
+                "error": str(e),
+            }
 
     def run_inference(self, params: dict[str, Any]) -> dict[str, Any]:
         """
-        启动推理任务
+        启动推理任务（同步阻塞直到完成）
 
         Args:
-            params: 包含 checkpoint_path, dataset, pred_len 等
+            params: 包含 checkpoint_path, dataset, model_name, seq_len, pred_len 等
 
         Returns:
             {
                 "status": "completed" | "failed",
-                "predictions": list[float],
-                "log_path": str,
+                "task_id": str,
+                "predictions_path": str | None,
+                "log_path": str | None,
+                "metrics": dict,
+                "error": str | None,
             }
         """
-        logger.info(f"[APISkill] 启动推理: checkpoint={params.get('checkpoint_path')}")
-        # TODO: POST /api/infer
-        return {
-            "status": "completed",
-            "predictions": [],
-            "log_path": "/path/to/inference.log",
-        }
+        logger.info(f"[APISkill] 启动推理: model={params.get('model_name')}, dataset={params.get('dataset')}")
+
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/infer",
+                json=params,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            task_id = result["task_id"]
+            logger.info(f"[APISkill] 推理任务已提交: {task_id}")
+
+            # 轮询直到完成
+            return self._poll_task(task_id)
+
+        except requests.RequestException as e:
+            logger.error(f"[APISkill] 请求推理 API 失败: {e}")
+            return {
+                "status": "failed",
+                "task_id": "",
+                "predictions_path": None,
+                "log_path": None,
+                "metrics": {},
+                "error": str(e),
+            }
 
     def get_status(self, task_id: str) -> dict[str, Any]:
         """查询任务状态"""
-        logger.info(f"[APISkill] 查询状态: {task_id}")
-        return {"status": "completed", "progress": 100}
+        try:
+            resp = requests.get(
+                f"{self.base_url}/api/status/{task_id}",
+                timeout=10,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            logger.error(f"[APISkill] 查询状态失败: task_id={task_id}, error={e}")
+            return {"status": "unknown", "progress": 0, "error": str(e)}
+
+    # -----------------------------------------------------------
+    # 内部方法
+    # -----------------------------------------------------------
+
+    def _poll_task(self, task_id: str) -> dict[str, Any]:
+        """轮询任务直到完成或失败"""
+        start_time = time.time()
+        last_status = "pending"
+
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > _MAX_POLL_TIME:
+                logger.warning(f"[APISkill] 任务 {task_id} 轮询超时")
+                return {
+                    "status": "failed",
+                    "task_id": task_id,
+                    "error": "轮询超时（超过 2 小时）",
+                }
+
+            status_data = self.get_status(task_id)
+
+            cur_status = status_data.get("status", "unknown")
+            if cur_status != last_status:
+                logger.info(
+                    f"[APISkill] 任务 {task_id} 状态变更: "
+                    f"{last_status} → {cur_status} (进度: {status_data.get('progress', 0)}%)"
+                )
+                last_status = cur_status
+
+            if cur_status == "completed":
+                return {
+                    "status": "completed",
+                    "task_id": task_id,
+                    "checkpoint_path": status_data.get("checkpoint_path"),
+                    "log_path": status_data.get("log_path"),
+                    "predictions_path": status_data.get("predictions_path"),
+                    "metrics": status_data.get("metrics", {}),
+                    "error": None,
+                }
+
+            if cur_status == "failed":
+                return {
+                    "status": "failed",
+                    "task_id": task_id,
+                    "error": status_data.get("error", "未知错误"),
+                }
+
+            time.sleep(_POLL_INTERVAL)
