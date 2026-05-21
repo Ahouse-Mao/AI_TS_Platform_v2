@@ -31,6 +31,9 @@ MODEL_SRC_DIR = os.path.join(SCRIPT_DIR, "model_src")
 CHECKPOINTS_DIR = os.path.join(MODEL_SRC_DIR, "checkpoints")
 RESULTS_DIR = os.path.join(MODEL_SRC_DIR, "results")
 
+# exp.test() 使用相对路径 "result.txt" 写入，CWD=项目根目录
+RESULT_TXT_PATH = os.path.join(SCRIPT_DIR, "..", "result.txt")
+
 
 # ============================================================
 # 任务状态定义
@@ -358,24 +361,26 @@ def _parse_result_txt(setting: str) -> dict[str, float]:
     """
     从 result.txt 解析指标的辅助函数。
 
-    result.txt 格式（由 exp.test 写入）：
+    result.txt 格式（由 exp.test 追加写入）：
         {setting}
         mse:0.123, mae:0.456, rse:1.234
+
+    注意：同一个 setting 可能出现多次（不同超参数），
+    所以从后往前遍历，取最后一次匹配的结果。
     """
-    result_txt_path = os.path.join(MODEL_SRC_DIR, "result.txt")
+    result_txt_path = RESULT_TXT_PATH
     if not os.path.exists(result_txt_path):
         logger.warning(f"[TaskManager] result.txt 不存在: {result_txt_path}")
         return {}
 
     try:
         with open(result_txt_path, "r") as f:
-            content = f.read()
+            lines = f.readlines()
 
-        # 按 setting 搜索
-        lines = content.strip().split("\n")
-        for i, line in enumerate(lines):
-            if setting in line and i + 1 < len(lines):
-                next_line = lines[i + 1]
+        # 从后往前遍历，找最后一个匹配项（最近一次运行的结果）
+        for i in range(len(lines) - 1, -1, -1):
+            if setting in lines[i] and i + 1 < len(lines):
+                next_line = lines[i + 1].strip()
                 metrics: dict[str, float] = {}
                 parts = next_line.split(",")
                 for part in parts:
@@ -386,7 +391,12 @@ def _parse_result_txt(setting: str) -> dict[str, float]:
                             metrics[key.strip()] = float(val.strip())
                         except ValueError:
                             pass
-                return metrics
+                if metrics:
+                    logger.info(
+                        f"[TaskManager] result.txt 取最后匹配: "
+                        f"行 {i+1} → {metrics}"
+                    )
+                    return metrics
     except Exception as e:
         logger.warning(f"[TaskManager] 解析 result.txt 失败: {e}")
 
