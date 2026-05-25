@@ -26,23 +26,12 @@ from backend.RAG.rag_struct import (
 
 logger = logging.getLogger(__name__)
 
-# 默认 collection 名称
-DEFAULT_COLLECTION = "rag_struct"
-
-# 元数据字段列表（与 rag_struct.py 中 MilvusStore.from_texts 的 schema 一致）
-_META_FIELDS = {
-    "source_type": DataType.VARCHAR,
-    "script_path": DataType.VARCHAR,
-    "script_name": DataType.VARCHAR,
-    "entry_py": DataType.VARCHAR,
-    "model": DataType.VARCHAR,
-    "dataset": DataType.VARCHAR,
-    "features": DataType.VARCHAR,
-    "seq_len": DataType.VARCHAR,
-    "label_len": DataType.VARCHAR,
-    "pred_len": DataType.VARCHAR,
-    "task_id": DataType.VARCHAR,
-}
+# 可预见的动态字段列表（pymilvus 无法自动发现动态字段名，需显式指定）
+_KNOWN_DYNAMIC_FIELDS = [
+    "model", "dataset", "task_id",
+    "features", "seq_len", "label_len", "pred_len",
+    "source_type", "script_path", "script_name", "entry_py",
+]
 
 
 class VectorDBSkill:
@@ -67,10 +56,10 @@ class VectorDBSkill:
 
     def __init__(self, model_name: str | None = None):
         self.model_name = model_name
-        self._embeddings = _get_embeddings(model_name)
-        self._milvus_path = MILVUS_DB_PATH
-        self._store: MilvusStore | None = None
-        self._client: MilvusClient | None = None
+        self._embeddings = _get_embeddings(model_name)  # 嵌入模型（bge-small-zh-v1.5）
+        self._milvus_path = MILVUS_DB_PATH               # Milvus Lite 数据库路径
+        self._store: MilvusStore | None = None            # MilvusStore 实例（懒加载）
+        self._client: MilvusClient | None = None          # 底层 MilvusClient（懒加载）
 
     # -----------------------------------------------------------
     # 内部懒加载属性
@@ -78,7 +67,7 @@ class VectorDBSkill:
 
     @property
     def store(self) -> MilvusStore:
-        """MilvusStore 实例（供 similarity_search 使用）"""
+        """MilvusStore 实例（供 similarity_search 使用），懒加载"""
         if self._store is None:
             self._store = MilvusStore(
                 embedding_function=self._embeddings,
@@ -88,7 +77,7 @@ class VectorDBSkill:
 
     @property
     def client(self) -> MilvusClient:
-        """底层 MilvusClient（供 insert / delete 使用）"""
+        """底层 MilvusClient（供 insert / delete 使用），懒加载"""
         if self._client is None:
             os.makedirs(os.path.dirname(self._milvus_path), exist_ok=True)
             self._client = MilvusClient(self._milvus_path)
@@ -100,20 +89,27 @@ class VectorDBSkill:
 
     def _ensure_collection(self, collection: str) -> None:
         """
-        确保 collection 存在，不存在则按标准 schema 创建
+        确保 collection 存在且兼容
+
+        如果 collection 已存在但未启用动态字段（旧 schema），
+        则删除重建以支持任意元数据字段。
         """
         if self.client.has_collection(collection):
-            return
+            info = self.client.describe_collection(collection)
+            # 检查是否已启用动态字段
+            if info.get("enable_dynamic_field", False):
+                return
+            logger.warning(f"[VectorDBSkill] collection {collection} 未启用动态字段，删除重建")
+            self.client.drop_collection(collection)
 
-        # 计算向量维度（通过一次 embed_query 测试）
+        # 通过一次 embed_query 测试获取向量维度
         dim = len(self._embeddings.embed_query("test"))
 
-        schema = MilvusClient.create_schema(auto_id=True, enable_dynamic_field=False)
+        schema = MilvusClient.create_schema(auto_id=True, enable_dynamic_field=True)
         schema.add_field(field_name="id", datatype=DataType.INT64, is_primary=True)
         schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=dim)
         schema.add_field(field_name="text", datatype=DataType.VARCHAR, max_length=65535)
-        for field_name, field_type in _META_FIELDS.items():
-            schema.add_field(field_name=field_name, datatype=field_type, max_length=256)
+        # 启用动态字段，元数据字段无需预声明
 
         index_params = MilvusClient.prepare_index_params()
         index_params.add_index(field_name="vector", index_type="FLAT", metric_type="IP")
@@ -150,31 +146,29 @@ class VectorDBSkill:
         """
         logger.info(f"[VectorDBSkill] 写入 {collection}: {data.get('task_id', 'unknown')}")
 
-        # 1. 提取待向量化的文本
+        # 1. 提取待向量化的文本（优先用 experience，回退到 text）
         text = data.get("experience") or data.get("text", "")
 
         # 2. 向量化
         vector = self._embeddings.embed_query(text)
 
-        # 3. 构建行数据（需匹配 schema 字段）
+        # 3. 构建行数据（动态字段模式下，任意字段均可写入）
         row: dict[str, Any] = {
             "vector": vector,
             "text": text,
         }
-        # 合并 metadata（只取 _META_FIELDS 中定义的字段）
+        # 合并 metadata 到行数据
         if metadata:
-            for k in _META_FIELDS:
-                if k in metadata:
-                    row[k] = str(metadata[k])
-        # 合并 data 中的可识别字段
-        for k in _META_FIELDS:
-            if k not in row and k in data:
-                row[k] = str(data[k])
+            row.update({k: str(v) for k, v in metadata.items()})
+        # 合并 data 中除 experience/text 外的可识别字段
+        for k, v in data.items():
+            if k not in ("experience", "text", "vector"):
+                row[k] = str(v)
 
         # 4. 确保 collection 存在
         self._ensure_collection(collection)
 
-        # 5. 插入
+        # 5. 写入 Milvus
         result = self.client.insert(collection_name=collection, data=[row])
         insert_id = str(result.get("ids", [None])[0]) if result else "unknown"
         logger.info(f"[VectorDBSkill] 插入成功: id={insert_id}")
@@ -244,16 +238,19 @@ class VectorDBSkill:
             return []
 
         self.client.load_collection(collection)
+
+        # 构造输出字段清单：声明字段 + 已知动态字段
         coll_info = self.client.describe_collection(collection)
-        all_fields = [f["name"] for f in coll_info.get("fields", [])]
+        declared = [f["name"] for f in coll_info.get("fields", []) if f["name"] not in ("id", "vector")]
+        output_fields = declared + [f for f in _KNOWN_DYNAMIC_FIELDS if f not in declared]
 
         results = self.client.query(
             collection_name=collection,
             filter=filter_expr,
             limit=limit,
-            output_fields=all_fields,
+            output_fields=output_fields,
         )
-        # 清理输出中的向量和 id
+        # 清理输出：去除内部字段（id, vector）
         cleaned = []
         for row in results:
             row.pop("vector", None)
@@ -282,4 +279,7 @@ class VectorDBSkill:
             collection_name=collection,
             filter=f'task_id == "{task_id}"',
         )
-        return len(result.get("ids", [])) > 0
+        # pymilvus MilvusClient.delete() 成功时返回 list[primary_keys]，失败或无匹配时返回 dict
+        if isinstance(result, list):
+            return len(result) > 0
+        return result.get("delete_count", 0) > 0

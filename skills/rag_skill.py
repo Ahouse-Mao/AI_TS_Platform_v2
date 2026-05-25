@@ -98,7 +98,7 @@ class RAGSkill:
             filter=where if where else None,
         )
 
-        # 3. 映射为结构化输出
+        # 3. 将原始结果映射为结构化输出
         results: list[dict[str, Any]] = []
         for raw in raw_results:
             meta = raw.get("metadata", {})

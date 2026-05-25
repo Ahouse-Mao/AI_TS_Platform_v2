@@ -28,6 +28,13 @@ SCRIPTS_DIR = os.path.join(BASE_DIR, "..", "model_src", "scripts")
 PERSIST_DIR = os.path.join(BASE_DIR, "rag_db_struct")
 MILVUS_DB_PATH = os.path.join(PERSIST_DIR, "milvus_lite.db")
 
+# 可预见的动态字段列表（pymilvus 无法自动发现动态字段名，需显式指定）
+_KNOWN_DYNAMIC_FIELDS = [
+    "model", "dataset", "task_id",
+    "features", "seq_len", "label_len", "pred_len",
+    "source_type", "script_path", "script_name", "entry_py",
+]
+
 KNOWN_MODELS = [
     "PatchTST",
     "DLinear",
@@ -133,16 +140,17 @@ class MilvusStore:
         # 确保集合已加载（Milvus Lite 跨进程时需要显式 load）
         self.client.load_collection(self.collection_name)
 
-        # 获取所有字段名
+        # 构造输出字段清单：声明字段 + 已知动态字段
         coll_info = self.client.describe_collection(self.collection_name)
-        all_fields = [f["name"] for f in coll_info.get("fields", [])]
+        declared = [f["name"] for f in coll_info.get("fields", []) if f["name"] not in ("id", "vector")]
+        output_fields = declared + [f for f in _KNOWN_DYNAMIC_FIELDS if f not in declared]
 
         results = self.client.search(
             collection_name=self.collection_name,
             data=[query_emb],
             filter=milvus_filter,
             limit=k,
-            output_fields=all_fields,
+            output_fields=output_fields,
         )
 
         docs: list[Document] = []
@@ -152,6 +160,18 @@ class MilvusStore:
                 text = entity.pop("text", "")
                 entity.pop("vector", None)
                 entity.pop("id", None)
+                # 展开动态字段（pymilvus 将动态字段存储在 $meta 中）
+                meta = entity.pop("$meta", None)
+                if isinstance(meta, dict):
+                    entity.update(meta)
+                elif isinstance(meta, str):
+                    try:
+                        import json
+                        entity.update(json.loads(meta))
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                # 将相似度得分写入 metadata
+                entity["score"] = hit.get("distance", 0.0)
                 docs.append(Document(page_content=text, metadata=dict(entity)))
 
         return docs
