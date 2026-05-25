@@ -60,7 +60,8 @@ def plan_node(state: AgentState) -> AgentState:
     """Plan Agent 节点 — state 修改下沉到 agent 内部"""
     logger.info("[Plan] 开始分析用户意图...")
     try:
-        state = PlanAgent().run(state)
+        llm_model = state.get("agent_data", {}).get("agent_params", {}).get("llm_model", "normal")
+        state = PlanAgent(llm_model=llm_model).run(state)
     except Exception as e:
         logger.error(f"[Plan] 执行失败: {e}")
         state["status"] = "error"
@@ -86,7 +87,8 @@ def eval_node(state: AgentState) -> AgentState:
     """Eval Agent 节点 — state 修改下沉到 agent 内部"""
     logger.info("[Eval] 开始评估训练结果...")
     try:
-        state = EvalAgent().run(state)
+        llm_model = state.get("agent_data", {}).get("agent_params", {}).get("llm_model", "normal")
+        state = EvalAgent(llm_model=llm_model).run(state)
     except Exception as e:
         logger.error(f"[Eval] 执行失败: {e}")
         state["status"] = "error"
@@ -99,7 +101,8 @@ def summary_node(state: AgentState) -> AgentState:
     """Summary Agent 节点 — state 修改下沉到 agent 内部"""
     logger.info("[Summary] 开始总结训练经验...")
     try:
-        state = SummaryAgent().run(state)
+        llm_model = state.get("agent_data", {}).get("agent_params", {}).get("llm_model", "normal")
+        state = SummaryAgent(llm_model=llm_model).run(state)
     except Exception as e:
         logger.error(f"[Summary] 执行失败: {e}")
         state["status"] = "error"
@@ -227,7 +230,7 @@ class TSPlatform:
 
         Args:
             user_input: 用户的自然语言输入
-            **kwargs: 额外参数（如 max_iteration, visualize 等）
+            **kwargs: 额外参数（如 max_iteration, visualize, llm_model 等）
 
         Returns:
             最终的 AgentState
@@ -246,6 +249,7 @@ class TSPlatform:
         initial_state["agent_data"]["agent_params"].update({
             "max_iteration": kwargs.get("max_iteration", 1),
             "visualize": kwargs.get("visualize", False),
+            "llm_model": kwargs.get("llm_model", "normal"),
         })
 
         logger.info(f"启动任务 {task_id}，用户输入: {user_input}")
@@ -268,8 +272,7 @@ class TSPlatform:
         initial_state["agent_data"]["intent"] = user_input
         initial_state["agent_data"]["agent_params"].update({
             "max_iteration": kwargs.get("max_iteration", 1),
-            "visualize": kwargs.get("visualize", False),
-        })
+            "visualize": kwargs.get("visualize", False),            "llm_model": kwargs.get("llm_model", "normal"),        })
 
         logger.info(f"启动任务 {task_id}，用户输入: {user_input}")
         config = {"configurable": {"thread_id": task_id}}

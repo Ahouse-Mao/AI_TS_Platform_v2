@@ -10,8 +10,13 @@ Visualization Skill — 可视化绘图
 输出：image_path (str)
 """
 
+import os
 import logging
-from typing import Any, Literal
+from typing import Any
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +64,22 @@ class VisualizationSkill:
             image_path: 保存的图片路径
         """
         logger.info(f"[VisualizationSkill] 绘制预测对比图: {title}")
-        # TODO: matplotlib 绘制
-        return f"{self.output_dir}/pred_vs_gt.png"
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(ground_truth, label="Ground Truth", linestyle="-", linewidth=1.5)
+        ax.plot(predictions, label="Predictions", linestyle="--", linewidth=1.5)
+        ax.set_xlabel("Time Step")
+        ax.set_ylabel("Value")
+        ax.set_title(title)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        path = os.path.join(self.output_dir, "pred_vs_gt.png")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        logger.info(f"[VisualizationSkill] 已保存: {path}")
+        return path
 
     def plot_loss_curve(
         self,
@@ -80,7 +99,24 @@ class VisualizationSkill:
             image_path: 保存的图片路径
         """
         logger.info(f"[VisualizationSkill] 绘制 loss 曲线: {title}")
-        return f"{self.output_dir}/loss_curve.png"
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        epochs = range(1, len(train_loss) + 1)
+        ax.plot(epochs, train_loss, label="Train Loss", marker="o", linewidth=1.5)
+        if val_loss:
+            ax.plot(epochs[: len(val_loss)], val_loss, label="Val Loss", marker="s", linewidth=1.5)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+        ax.set_title(title)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        path = os.path.join(self.output_dir, "loss_curve.png")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        logger.info(f"[VisualizationSkill] 已保存: {path}")
+        return path
 
     def plot_iteration_comparison(
         self,
@@ -92,7 +128,7 @@ class VisualizationSkill:
         绘制多轮迭代指标对比图
 
         Args:
-            history: 历史迭代记录列表
+            history: 历史迭代记录列表 [{"iteration": 1, "metrics": {"mse": ...}}, ...]
             metric_name: 要对比的指标名
             title: 图表标题
 
@@ -100,4 +136,21 @@ class VisualizationSkill:
             image_path: 保存的图片路径
         """
         logger.info(f"[VisualizationSkill] 绘制迭代对比图: {title}")
-        return f"{self.output_dir}/iteration_comparison.png"
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        iterations = [h.get("iteration", i + 1) for i, h in enumerate(history)]
+        values = [h.get("metrics", {}).get(metric_name, 0) for h in history]
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.bar(iterations, values, width=0.5, color="steelblue", edgecolor="navy")
+        ax.plot(iterations, values, color="crimson", marker="o", linewidth=1.5, markersize=6)
+        ax.set_xlabel("Iteration")
+        ax.set_ylabel(metric_name.upper())
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3, axis="y")
+
+        path = os.path.join(self.output_dir, "iteration_comparison.png")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        logger.info(f"[VisualizationSkill] 已保存: {path}")
+        return path

@@ -17,6 +17,7 @@ from typing import Any
 from skills.api_skill import APISkill
 from skills.checkpoint_skill import CheckpointSkill
 from skills.log_parser_skill import LogParserSkill
+from skills.visualization_skill import VisualizationSkill
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ class WorkAgent:
         self.api_skill = APISkill()
         self.checkpoint_skill = CheckpointSkill()
         self.log_parser_skill = LogParserSkill()
+        self.viz_skill = VisualizationSkill()
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         """
@@ -93,6 +95,7 @@ class WorkAgent:
         plan_params = state.get("agent_data", {}).get("plan", {})
         eval_suggestions = state.get("agent_data", {}).get("eval", {})
         intent = state.get("agent_data", {}).get("intent", "train")
+        visualize = state.get("agent_data", {}).get("agent_params", {}).get("visualize", False)
 
         logger.info(f"[WorkAgent] 任务类型: {intent}, plan 参数: {plan_params}")
 
@@ -108,9 +111,9 @@ class WorkAgent:
 
             # ---- 2. 根据任务类型执行 ----
             if intent == "inference":
-                result = self._run_inference(merged_params)
+                result = self._run_inference(merged_params, visualize)
             else:
-                result = self._run_training(merged_params)
+                result = self._run_training(merged_params, visualize)
 
             # ---- 3. 更新 state ----
             state["status"] = result.get("status", "error")
@@ -147,7 +150,7 @@ class WorkAgent:
     # 内部方法
     # -----------------------------------------------------------
 
-    def _run_training(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _run_training(self, params: dict[str, Any], visualize: bool = False) -> dict[str, Any]:
         """执行训练任务"""
         logger.info(f"[WorkAgent] 开始训练: {params.get('model_name')} on {params.get('dataset')}")
 
@@ -179,15 +182,25 @@ class WorkAgent:
             if parsed.get("total_time"):
                 metrics["total_time"] = parsed["total_time"]
 
+        # 可视化
+        image_paths = {}
+        if visualize:
+            if metrics.get("train_loss"):
+                image_paths["loss_curve"] = self.viz_skill.plot_loss_curve(
+                    metrics["train_loss"], metrics.get("val_loss", []),
+                    title=f"{params.get('model_name')} on {params.get('dataset')} - Loss Curve",
+                )
+
         return {
             "status": "completed",
             "checkpoint_path": checkpoint_path,
             "log_path": log_path,
             "metrics": metrics,
             "raw_log": metrics.get("raw_summary", ""),
+            "images": image_paths if image_paths else None,
         }
 
-    def _run_inference(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _run_inference(self, params: dict[str, Any], visualize: bool = False) -> dict[str, Any]:
         """执行推理任务"""
         logger.info(f"[WorkAgent] 开始推理: {params.get('model_name')} on {params.get('dataset')}")
 
@@ -214,7 +227,7 @@ class WorkAgent:
                 "error": api_result.get("error", "推理失败"),
             }
 
-        return {
+        result = {
             "status": "completed",
             "checkpoint_path": api_result.get("checkpoint_path", ""),
             "log_path": api_result.get("log_path", ""),
@@ -222,3 +235,20 @@ class WorkAgent:
             "metrics": api_result.get("metrics", {}),
             "raw_log": "",
         }
+
+        # 可视化
+        if visualize and result.get("predictions_path"):
+            import numpy as np
+            try:
+                pred = np.load(result["predictions_path"])
+                result["images"] = {
+                    "predictions": self.viz_skill.plot_predictions(
+                        ground_truth=pred[:, 0].tolist() if pred.ndim > 1 else [],
+                        predictions=pred[:, -1].tolist() if pred.ndim > 1 else pred.tolist(),
+                        title=f"{params.get('model_name')} on {params.get('dataset')} - Prediction",
+                    ),
+                }
+            except Exception as e:
+                logger.warning(f"[WorkAgent] 推理可视化失败: {e}")
+
+        return result

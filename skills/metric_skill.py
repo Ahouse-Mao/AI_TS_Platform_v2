@@ -55,7 +55,6 @@ class MetricSkill:
             {"mse": float, "mae": float, "rmse": float, "mape": float}
         """
         logger.info(f"[MetricSkill] 计算指标, 数据点数: {len(ground_truth)}")
-        # TODO: numpy 计算
         import numpy as np
 
         y_true = np.array(ground_truth, dtype=np.float64)
