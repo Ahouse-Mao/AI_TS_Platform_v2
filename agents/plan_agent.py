@@ -11,15 +11,14 @@ Plan Agent — 意图解析 & 初始化参数生成
 """
 
 import json
-import os
 import logging
 from typing import Any
 
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from skills.rag_skill import RAGSkill
 from skills.param_validate_skill import ParamValidateSkill
+from conf.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -53,23 +52,10 @@ class PlanAgent:
         "epochs": 10,
     }
 
-    def __init__(self):
+    def __init__(self, llm_model: str = "normal"):
         self.rag_skill = RAGSkill()
         self.param_validate_skill = ParamValidateSkill()
-        self._llm = self._init_llm()
-
-    @staticmethod
-    def _init_llm() -> ChatOpenAI | None:
-        """初始化 LLM（无 API key 时不报错，后续走默认参数兜底）"""
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if not api_key:
-            logger.warning("[PlanAgent] OPENAI_API_KEY 未设置，将使用默认参数")
-            return None
-        return ChatOpenAI(
-            model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
-            temperature=0.1,
-            model_kwargs={"response_format": {"type": "json_object"}},
-        )
+        self._llm = get_llm(advanced=(llm_model == "advanced"))
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         """

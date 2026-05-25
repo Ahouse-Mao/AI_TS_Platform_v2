@@ -11,14 +11,13 @@ Summary Agent — 经验总结 & RAG 写入
 """
 
 import json
-import os
 import logging
 from typing import Any
 
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from skills.vector_db_skill import VectorDBSkill
+from conf.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -41,21 +40,9 @@ class SummaryAgent:
 
 输出合法 JSON，包含 summary（最优指标/参数/经验/建议）和 next_action="end"。"""
 
-    def __init__(self):
+    def __init__(self, llm_model: str = "normal"):
         self.vector_db_skill = VectorDBSkill()
-        self._llm = self._init_llm()
-
-    @staticmethod
-    def _init_llm() -> ChatOpenAI | None:
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if not api_key:
-            logger.warning("[SummaryAgent] OPENAI_API_KEY 未设置，跳过 LLM 总结")
-            return None
-        return ChatOpenAI(
-            model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
-            temperature=0.1,
-            model_kwargs={"response_format": {"type": "json_object"}},
-        )
+        self._llm = get_llm(advanced=(llm_model == "advanced"))
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         """

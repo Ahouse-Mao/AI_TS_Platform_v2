@@ -10,69 +10,40 @@ Eval Agent — 评估 & 优化建议
 输出：{"eval": {...}, "next_action": "..."}
 """
 
+import json
 import logging
 from typing import Any
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from skills.metric_skill import MetricSkill
-from skills.visualization_skill import VisualizationSkill
+from conf.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
 
 class EvalAgent:
     """
-    评估智能体
+    评估智能体 — 分析训练结果，控制迭代
 
-    System Prompt（供 LLM 调用时使用）:
-    ---
-    你是时序预测模型评估专家。根据 work agent 的训练/推理结果，完成以下工作：
-    1. 计算/复核关键指标：MSE、MAE、RMSE、MAPE 等
-    2. 分析 loss 曲线：是否存在过拟合/欠拟合/收敛问题
-    3. 与历史迭代中的指标对比，判断是否在持续改善
-    4. 给出参数优化建议：
-       - 调整 learning_rate
-       - 调整 batch_size
-       - 调整 seq_len / pred_len
-       - 建议增加/减少 epochs
-       - 建议切换模型架构
-    5. 判断是否继续迭代：
-       - 如果指标在持续改善且未达最大迭代 → next_action = "work"
-       - 如果指标停滞或已达最大迭代 → next_action = "summary"
-
-    输入 work 数据示例：
-    {
-      "status": "completed",
-      "metrics": { "mse": 0.15, "mae": 0.25, "train_loss": [...], "val_loss": [...] }
-    }
-
-    输出 JSON 格式：
-    {
-      "eval": {
-        "metrics": { "mse": ..., "mae": ..., "rmse": ..., "mape": ... },
-        "analysis": "模型收敛良好，但 val_loss 在第 5 轮后开始上升，存在轻微过拟合",
-        "param_adjustments": {
-          "learning_rate": 5e-5,
-          "epochs": 8
-        },
-        "summary": "第 N 轮评估：MSE=0.15, MAE=0.25，建议降低学习率继续训练"
-      },
-      "next_action": "work" | "summary"
-    }
-    ---
+    工作流程：
+      1. 从 work 结果中提取指标
+      2. 与历史记录对比，判断趋势（改善/停滞/恶化）
+      3. LLM 生成分析和参数调整建议
+      4. 决定 next_action（继续迭代 / 结束）
     """
 
     SYSTEM_PROMPT = """你是时序预测模型评估专家。根据训练/推理结果：
 1. 计算/复核关键指标（MSE, MAE, RMSE, MAPE）
-2. 分析 loss 曲线，诊断过拟合/欠拟合/收敛问题
-3. 对比历史迭代指标，判断改善趋势
-4. 给出参数优化建议（learning_rate, batch_size, epochs 等）
-5. 判断是否继续迭代（next_action = "work" | "summary"）
+2. 对比历史迭代指标，判断改善趋势
+3. 给出参数优化建议（learning_rate, batch_size, epochs 等）
+4. 判断是否继续迭代（next_action = "work" | "summary"）
 
 输出合法 JSON，包含 eval（指标/分析/建议）和 next_action 字段。"""
 
-    def __init__(self):
+    def __init__(self, llm_model: str = "normal"):
         self.metric_skill = MetricSkill()
-        self.viz_skill = VisualizationSkill()
+        self._llm = get_llm(advanced=(llm_model == "advanced"))
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         """
@@ -89,44 +60,141 @@ class EvalAgent:
             更新后的完整 AgentState
         """
         work_result = state.get("agent_data", {}).get("work", {})
+        history = state.get("agent_data", {}).get("history", [])
         iteration = state["agent_data"]["agent_state"]["iteration"]
         max_iter = state["agent_data"]["agent_params"].get("max_iteration", 1)
 
         logger.info(f"[EvalAgent] 第 {iteration} 轮评估，最大迭代 {max_iter}")
 
-        # TODO: 实际逻辑
-        # 1. 计算指标
-        # metrics = self.metric_skill.compute(work_result)
-        # 2. LLM 分析 + 对比历史
-        # analysis = llm.invoke(system_prompt=self.SYSTEM_PROMPT, context=work_result, history=history)
-        # 3. 判断是否继续迭代
+        # ---- 1. 提取当前指标 ----
+        curr_metrics = self._extract_metrics(work_result)
 
-        should_continue = iteration < max_iter
+        # ---- 2. 判断趋势 ----
+        trend = self._assess_trend(curr_metrics, history)
+        should_continue = (
+            iteration < max_iter
+            and trend != "worsening"  # 持续恶化时提前结束
+        )
 
-        # ---- 占位：直接修改 state ----
+        # ---- 3. LLM 生成分析与建议（不可用时走规则） ----
+        eval_result = self._generate_eval(
+            curr_metrics, history, iteration, trend, should_continue,
+        )
+
+        # ---- 4. 写回 state ----
         state["status"] = "success"
         state["agent"] = "eval"
-        state["agent_data"]["eval"] = {
-            "metrics": {
-                "mse": work_result.get("metrics", {}).get("mse", 0.15),
-                "mae": work_result.get("metrics", {}).get("mae", 0.25),
-                "rmse": 0.39,
-                "mape": 8.5,
-            },
-            "analysis": "模型在第 {} 轮训练中收敛良好，val_loss 持续下降。".format(iteration),
-            "param_adjustments": {
-                "learning_rate": 5e-5,
-            } if should_continue else {},
-            "summary": "第 {} 轮评估：MSE=0.15, MAE=0.25".format(iteration),
-        }
-
-        # 记录历史快照
+        state["agent_data"]["eval"] = eval_result
         state["agent_data"]["history"].append({
             "iteration": iteration,
-            "eval_summary": state["agent_data"]["eval"].get("summary", ""),
-            "metrics": state["agent_data"]["eval"].get("metrics", {}),
+            "eval_summary": eval_result.get("summary", ""),
+            "metrics": eval_result.get("metrics", {}),
         })
-
         state["next_action"] = "work" if should_continue else "summary"
 
         return state
+
+    # -----------------------------------------------------------
+    # 内部方法
+    # -----------------------------------------------------------
+
+    @staticmethod
+    def _extract_metrics(work: dict) -> dict:
+        """从 work 结果中提取关键指标"""
+        metrics = dict(work.get("metrics", {}))
+
+        # 从 loss 序列中提取首尾值反映变化趋势
+        for key in ("train_loss", "val_loss"):
+            series = metrics.get(key, [])
+            if isinstance(series, list) and len(series) > 1:
+                metrics[f"{key}_start"] = series[0]
+                metrics[f"{key}_end"] = series[-1]
+                metrics[f"{key}_delta"] = series[-1] - series[0]
+
+        return metrics
+
+    @staticmethod
+    def _assess_trend(curr: dict, history: list[dict]) -> str:
+        """
+        判断趋势: improving / plateau / worsening
+        比较当前 MSE 与历史最优 MSE
+        """
+        curr_mse = curr.get("mse")
+        if curr_mse is None or not history:
+            return "improving"  # 首轮默认改善
+
+        best_hist_mse = min(
+            h.get("metrics", {}).get("mse", float("inf"))
+            for h in history
+        )
+
+        if curr_mse < best_hist_mse * 0.95:
+            return "improving"
+        elif curr_mse > best_hist_mse * 1.05:
+            return "worsening"
+        return "plateau"
+
+    def _generate_eval(
+        self,
+        curr_metrics: dict,
+        history: list[dict],
+        iteration: int,
+        trend: str,
+        should_continue: bool,
+    ) -> dict:
+        """生成评估结果，优先用 LLM"""
+        if self._llm and history:
+            llm_result = self._call_llm(curr_metrics, history, iteration)
+            if llm_result:
+                return llm_result
+
+        return self._rule_based_eval(curr_metrics, iteration, trend, should_continue)
+
+    def _call_llm(self, curr_metrics: dict, history: list[dict], iteration: int) -> dict | None:
+        """调用 LLM 生成评估"""
+        try:
+            response = self._llm.invoke([
+                SystemMessage(content=self.SYSTEM_PROMPT),
+                HumanMessage(content=json.dumps({
+                    "current_iteration": iteration,
+                    "current_metrics": curr_metrics,
+                    "history": history,
+                }, ensure_ascii=False)),
+            ])
+            raw = response.content.strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            data = json.loads(raw)
+            return data.get("eval", data)
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.warning(f"[EvalAgent] LLM 输出解析失败: {e}")
+            return None
+
+    @staticmethod
+    def _rule_based_eval(
+        curr_metrics: dict,
+        iteration: int,
+        trend: str,
+        should_continue: bool,
+    ) -> dict:
+        """规则兜底的评估"""
+        mse = curr_metrics.get("mse", 0.0)
+        mae = curr_metrics.get("mae", 0.0)
+
+        # 根据趋势生成分析和建议
+        if trend == "improving":
+            analysis = f"第 {iteration} 轮 MSE={mse:.4f}，指标持续改善。"
+            adj = {"learning_rate": curr_metrics.get("learning_rate", 0.001) * 0.5}
+        elif trend == "plateau":
+            analysis = f"第 {iteration} 轮 MSE={mse:.4f}，指标趋于平稳，建议加大调整幅度。"
+            adj = {"learning_rate": curr_metrics.get("learning_rate", 0.001) * 0.3}
+        else:  # worsening
+            analysis = f"第 {iteration} 轮 MSE={mse:.4f}，指标出现恶化，建议检查参数设置。"
+            adj = {}
+
+        return {
+            "metrics": {"mse": mse, "mae": mae},
+            "analysis": analysis,
+            "param_adjustments": adj if should_continue else {},
+            "summary": f"第 {iteration} 轮评估：MSE={mse:.4f}，MAE={mae:.4f}，{trend}",
+        }
