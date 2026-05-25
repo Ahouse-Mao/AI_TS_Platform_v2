@@ -14,7 +14,6 @@ import logging
 from typing import Any
 
 from skills.vector_db_skill import VectorDBSkill
-from skills.rag_skill import RAGSkill
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +66,6 @@ class SummaryAgent:
 
     def __init__(self):
         self.vector_db_skill = VectorDBSkill()
-        self.rag_skill = RAGSkill()
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         """
