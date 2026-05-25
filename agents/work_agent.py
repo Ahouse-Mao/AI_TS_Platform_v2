@@ -121,14 +121,15 @@ class WorkAgent:
             state["agent_data"]["work"] = result
 
             # ---- 4. 决定 next_action ----
+            max_iter = state.get("agent_data", {}).get("agent_params", {}).get("max_iteration", 1)
             if result.get("status") == "failed":
                 state["next_action"] = "summary" if state.get("agent_data", {}).get("history") else "end"
             elif intent == "inference":
-                # 推理任务不需要 eval，直接结束
                 state["next_action"] = "summary"
+            elif max_iter <= 1:
+                state["next_action"] = "end"  # 单次训练，不迭代
             else:
-                # 训练任务 → 交给 eval 评估
-                state["next_action"] = "eval"
+                state["next_action"] = "eval"  # 迭代训练
 
             state["agent_data"]["agent_state"]["iteration"] = (
                 state["agent_data"]["agent_state"].get("iteration", 0) + 1

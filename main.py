@@ -293,30 +293,30 @@ if __name__ == "__main__":
 
     platform = TSPlatform()
 
-    # 示例 1：普通训练任务（不自动迭代）
-    print("\n" + "=" * 60)
-    print("示例 1：普通训练任务")
-    print("=" * 60)
-    result = platform.run("用 DLinear 模型在 ETTh1 数据集上训练，预测长度 96")
-    print(f"状态: {result['status']}, 最终 agent: {result['agent']}")
-    print(f"错误: {result['errors']}")
+    # # 示例 1：普通训练任务（不自动迭代）
+    # print("\n" + "=" * 60)
+    # print("示例 1：普通训练任务")
+    # print("=" * 60)
+    # result = platform.run("用 DLinear 模型在 ETTh1 数据集上训练，预测长度 96")
+    # print(f"状态: {result['status']}, 最终 agent: {result['agent']}")
+    # print(f"错误: {result['errors']}")
 
-    # 示例 2：自动迭代训练任务
-    print("\n" + "=" * 60)
-    print("示例 2：自动迭代优化任务")
-    print("=" * 60)
-    result = platform.run(
-        "用 PatchTST 在 ETTh1 上训练并自动调优",
-        max_iteration=3,
-        visualize=True,
-    )
-    print(f"状态: {result['status']}, 最终 agent: {result['agent']}")
-    print(f"迭代轮数: {result['agent_data']['agent_state']['iteration']}")
-    print(f"历史快照数: {len(result['agent_data']['history'])}")
+    # # 示例 2：自动迭代训练任务
+    # print("\n" + "=" * 60)
+    # print("示例 2：自动迭代优化任务")
+    # print("=" * 60)
+    # result = platform.run(
+    #     "用 PatchTST 在 ETTh1 上训练并自动调优",
+    #     max_iteration=3,
+    #     visualize=True,
+    # )
+    # print(f"状态: {result['status']}, 最终 agent: {result['agent']}")
+    # print(f"迭代轮数: {result['agent_data']['agent_state']['iteration']}")
+    # print(f"历史快照数: {len(result['agent_data']['history'])}")
 
-    # 示例 3：推理任务
-    print("\n" + "=" * 60)
-    print("示例 3：推理任务")
-    print("=" * 60)
-    result = platform.run("加载最近的 ETTh1 模型进行推理")
-    print(f"状态: {result['status']}, 最终 agent: {result['agent']}")
+    # # 示例 3：推理任务
+    # print("\n" + "=" * 60)
+    # print("示例 3：推理任务")
+    # print("=" * 60)
+    # result = platform.run("加载最近的 ETTh1 模型进行推理")
+    # print(f"状态: {result['status']}, 最终 agent: {result['agent']}")

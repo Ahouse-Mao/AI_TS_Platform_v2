@@ -21,3 +21,4 @@ backend/RAG/rag_db_struct
 *.so
 *.txt
 *.json
+*.png
